@@ -995,6 +995,7 @@ final class MinisLegacyHostingContentView<Content: View>: UIView, UIContentView 
     private var bridgedHeight: CGFloat = 0
     private var bridgeScheduled = false
     private var bridgeStreak = 0
+    private var lastBridgeCheckAt: CFTimeInterval = 0
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -1003,6 +1004,11 @@ final class MinisLegacyHostingContentView<Content: View>: UIView, UIContentView 
 
     private func scheduleBridgeCheck() {
         guard !bridgeScheduled, bridgeStreak < 4 else { return }
+        // [ios15-port-fix/v4] 节流：布局密集期（流式每个 chunk 一轮）每 0.25s
+        // 至多探测一次，避免每 tick 每可见 cell 都跑一次 SwiftUI 测量。
+        let now = CACurrentMediaTime()
+        guard now - lastBridgeCheckAt >= 0.25 else { return }
+        lastBridgeCheckAt = now
         bridgeScheduled = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -1013,15 +1019,24 @@ final class MinisLegacyHostingContentView<Content: View>: UIView, UIContentView 
 
     private func bridgeHostHeightIfNeeded() {
         guard host.view.window != nil, bounds.width > 1 else { return }
-        let fit = host.view.systemLayoutSizeFitting(
-            CGSize(width: bounds.width, height: UIView.layoutFittingCompressedSize.height),
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel
+        // [ios15-port-fix/v4] 改用 sizeThatFits（UIView 契约上的纯查询，全高
+        // 提议）。v3 用 systemLayoutSizeFitting(…, height: compressed≈0) 直接
+        // 量宿主视图——UIHostingView 会在这次测量里以 0 高提议跑一遍 SwiftUI
+        // 布局，事后把内部状态留在偏大值，下一轮 PLAF 量出偏大高度 → cell
+        // 偏高 → 空白间距（真机 v3 报告：叠压没了但间距变宽）。
+        let fit = host.view.sizeThatFits(
+            CGSize(width: bounds.width, height: .greatestFiniteMagnitude)
         ).height
         guard fit.isFinite, fit > 0 else { return }
         if abs(fit - bridgedHeight) <= 1 {
             // 收敛：高度与上次桥值一致，重置熔断计数。
             bridgeStreak = 0
+            return
+        }
+        // [ios15-port-fix/v4] 防误报：SwiftUI 理想高度与当前已布局高度一致时
+        // 没有漂移，不触发（同时避免桥的首次探测对每个 cell 空放一轮）。
+        if abs(fit - bounds.height) <= 2 {
+            bridgedHeight = fit
             return
         }
         bridgedHeight = fit

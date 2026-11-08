@@ -56,6 +56,19 @@ class SelfSizingCell: UICollectionViewCell {
         contentView.clipsToBounds = true
     }
 
+    /// [ios15-port-fix] iOS 15 兼容开关：绕过 PLAF 的全部高度缓存捷径。
+    ///
+    /// dedup / 宽缓存 / deferSelfSizing 缓存返回的高度，可能是早前在宽度或
+    /// 内容瞬态（快照应用、旋转、markdown 重渲染）期间量出的；iOS 16 的系统
+    /// UIHostingConfiguration 会在后续 pass 自愈，iOS 15 的回退宿主
+    /// （MinisLegacyHostingContentView）不会——错误高度一旦入缓存就会被这些
+    /// 捷径长期复用，表现为消息列表间歇性整屏叠压。iOS 15 上一律实时测量
+    /// （单次实测 ~2.5–3.8ms），iOS 16+ 行为一字不变。
+    private static let isLegacyIOS15: Bool = {
+        if #available(iOS 16.0, *) { return false }
+        return true
+    }()
+
     /// Incremented each time contentConfiguration is applied.  Used by
     /// `preferredLayoutAttributesFitting` to detect that the hosting
     /// configuration changed between the moment UIKit scheduled the
@@ -185,7 +198,8 @@ class SelfSizingCell: UICollectionViewCell {
         // `lastMeasureMediaTime` is kept (still written, still cleared) — it
         // remains useful diagnostics and leaves the 50ms window one line away
         // if a height-staleness case this reasoning missed ever shows up.
-        if let cached = lastComputedHeight,
+        if !Self.isLegacyIOS15,
+           let cached = lastComputedHeight,
            let cachedW = lastComputedWidth,
            abs(layoutAttributes.size.width - cachedW) < 1 {
             let copy = layoutAttributes.copy() as! UICollectionViewLayoutAttributes
@@ -269,7 +283,8 @@ class SelfSizingCell: UICollectionViewCell {
             let item = layoutAttributes.indexPath.item
             let streamingActive = layout.hasActiveStreaming
             let isStreamingItem = streamingActive && layout.isStreamingCell(item)
-            if layout.deferSelfSizing || streamingActive,
+            if !Self.isLegacyIOS15,
+               layout.deferSelfSizing || streamingActive,
                !isStreamingItem,
                let cached = lastComputedHeight, let cachedW = lastComputedWidth,
                abs(layoutAttributes.size.width - cachedW) < 1 {
@@ -360,7 +375,8 @@ class SelfSizingCell: UICollectionViewCell {
         // Same-width cache hit (no time bound). Same rationale as the
         // dedup-window above but covers the broader "width never changed"
         // case across longer scroll runs.
-        if let cached = lastComputedHeight,
+        if !Self.isLegacyIOS15,
+           let cached = lastComputedHeight,
            abs(layoutAttributes.size.width - attrs.size.width) < 1 {
             attrs.size.height = cached
             // [ScrollStall] Count broad cache hits; flush summary 1Hz.

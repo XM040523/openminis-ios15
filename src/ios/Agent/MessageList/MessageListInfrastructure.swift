@@ -43,7 +43,7 @@ enum MessageListItem: Hashable {
 
 /// A plain UICollectionViewCell that correctly reports its preferred size
 /// for UIHostingConfiguration content with custom layouts.
-class SelfSizingCell: UICollectionViewCell {
+class SelfSizingCell: UICollectionViewCell, MinisCellMeasuredStateClearable {
     /// Clip content to cell bounds so SwiftUI content doesn't visually overflow
     /// into adjacent cells during the brief window between content update and
     /// layout re-measurement (text drift onto tool capsule bug).

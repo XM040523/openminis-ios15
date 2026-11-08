@@ -848,6 +848,15 @@ extension View {
 ///
 /// 用法上只需把 `cell.applyContentConfiguration(config)` 改成
 /// `cell.applyContentConfiguration(config.makeConfiguration())`。
+///
+/// [ios15-port-fix] 高度桥的清状态协议：本文件被主 App 与两个扩展目标共同
+/// 编译，而集合视图 cell（SelfSizingCell）只在主 App 目标存在——桥里不能
+/// 直接引用该类型（扩展目标编译不过），用协议解耦；扩展里没有集合视图，
+/// 运行时不会命中，实现侧（App 目标）声明遵循即可。
+protocol MinisCellMeasuredStateClearable: AnyObject {
+    func clearAllMeasuredStateForBridge()
+}
+
 struct MinisHostingConfiguration<Content: View> {
     let content: Content
     var minWidth: CGFloat = 0
@@ -1025,8 +1034,8 @@ final class MinisLegacyHostingContentView<Content: View>: UIView, UIContentView 
             if foundCollectionView == nil, let v = cur as? UICollectionView { foundCollectionView = v }
             node = cur.superview
         }
-        (foundCell as? SelfSizingCell)?.clearAllMeasuredStateForBridge()
-        foundCollectionView?.invalidateLayout()
+        (foundCell as? MinisCellMeasuredStateClearable)?.clearAllMeasuredStateForBridge()
+        foundCollectionView?.collectionViewLayout.invalidateLayout()
         // 下一拍复查：确认 cell 已按新高度布局并收敛（或继续修正直到熔断）。
         scheduleBridgeCheck()
     }

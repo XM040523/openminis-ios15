@@ -34,7 +34,26 @@ final class MessageListLayout: UICollectionViewLayout {
         estimatedHeights[index] = height
     }
 
+    /// [ios15-port-fix] iOS 15 是否启用 precalc 高度捷径。
+    ///
+    /// precalc 的校准系数（估算比真实渲染每行紧 ~2.4pt、CJK 平铺 +7pt）是在
+    /// 上游 iOS 16 的 SwiftUI 渲染上标定的。iOS 15 上（移植版走
+    /// `MinisLegacyHostingContentView` + TextKit 1 回退）实际渲染与该公式的
+    /// 偏差随行数线性放大，而流式 cell 在 `preferredLayoutAttributesFitting`
+    /// 里直接返回 precalc 跳过实测，导致相邻单元格 frame 重叠——表现为长
+    /// 中文回复/代码块场景整屏消息互相叠压（真机 iOS 15.6.1 用户报告）。
+    ///
+    /// 因此 iOS 15 一律禁用 precalc 的写入与读取，所有 cell 统一走真实
+    /// 测量路径（preferredLayoutAttributesFitting → systemLayoutSizeFitting）；
+    /// iOS 16+ 行为保持不变。
+    private var precalcEnabled: Bool {
+        if #available(iOS 16.0, *) { return true }
+        return false
+    }
+
     func setPrecalcHeight(_ height: CGFloat, at index: Int) {
+        // [ios15-port-fix] iOS 15 不再写入 precalc（原因见 precalcEnabled）。
+        guard precalcEnabled else { return }
         // Don't overwrite if we already have a real measured height.
         guard heightCache[index] == nil else { return }
         precalcHeights[index] = height
@@ -193,7 +212,7 @@ final class MessageListLayout: UICollectionViewLayout {
             let h: CGFloat
             if let cached = heightCache[i] {
                 h = cached
-            } else if let precalc = precalcHeights[i] {
+            } else if precalcEnabled, let precalc = precalcHeights[i] {
                 h = precalc
             } else if let est = estimatedHeights[i] {
                 h = est
@@ -815,12 +834,13 @@ final class MessageListLayout: UICollectionViewLayout {
     }
 
     /// Check if a precalculated height exists for this index.
+    /// [ios15-port-fix] iOS 15 恒返回 nil——流式 cell 因此退回真实测量路径。
     func precalcHeight(at index: Int) -> CGFloat? {
-        precalcHeights[index]
+        precalcEnabled ? precalcHeights[index] : nil
     }
 
     func hasPrecalcHeight(at index: Int) -> Bool {
-        precalcHeights[index] != nil
+        precalcEnabled && precalcHeights[index] != nil
     }
 
     // MARK: - [T-ios-scroll-decel-height-drift] Content-keyed real-height memo

@@ -646,6 +646,20 @@ class SelfSizingCell: UICollectionViewCell {
         lastMeasureMediaTime = nil
     }
 
+    /// [ios15-port-fix] 桥接修正专用：清空全部「可跳过实测」的状态（PLAF 缓存
+    /// + 实测种子），强制下一次 preferredLayoutAttributesFitting 真实测量。
+    ///
+    /// 只清 lastComputedHeight 不够——`seedMeasuredHeight` 塞进去的种子同样
+    /// 会短路实测：SwiftUI 侧内容漂移（折叠面板、异步渲染）不改 textStorage
+    /// 时，contentKey 不变，种子会把旧高度原样喂回来，桥永远不收敛。
+    func clearAllMeasuredStateForBridge() {
+        lastComputedHeight = nil
+        lastComputedWidth = nil
+        lastMeasureMediaTime = nil
+        seededHeight = nil
+        seededWidth = nil
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         lastComputedHeight = nil

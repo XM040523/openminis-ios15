@@ -965,6 +965,70 @@ final class MinisLegacyHostingContentView<Content: View>: UIView, UIContentView 
     private func applyConfiguration() {
         guard let cfg = configuration as? MinisLegacyHostingConfiguration<Content> else { return }
         host.rootView = cfg.content
+        // [ios15-port-fix] 新内容 = 一次合法的高度变化机会，重置桥熔断计数。
+        bridgeStreak = 0
+    }
+
+    // MARK: [ios15-port-fix] SwiftUI 内容高度 → 集合视图失效 的桥
+    //
+    // iOS 16 的系统 UIHostingConfiguration 在 SwiftUI 图更新后会自行通知
+    // 集合视图重新自-sizing；iOS 15 没有这条链：hosting 视图的
+    // intrinsicContentSize 失效只会弄脏 Auto Layout 引擎，没有任何东西触发
+    // UICollectionView 重新测量——内容在静止期间变化后，旧高度一直用到用户
+    // 滚动为止（真机 iOS 15.6.1 表现：局部叠压，滑一下就恢复——滚动让 cell
+    // 重新走 configure → PLAF 实测，等于手工触发了缺失的通知）。
+    //
+    // 桥的实现：layoutSubviews（intrinsic 失效会经约束系统传导到这里）→ 合并
+    // 调度一次异步实测（host 视图 systemLayoutSizeFitting，纯测量、不触发布局
+    // 重入）→ 与上次桥值差 >1pt → 找到 SelfSizingCell 清全部实测状态 + 对集
+    // 合视图 invalidateLayout（UIKit 自带按 tick 合并）。连续 4 次未收敛即熔
+    // 断，防测量振荡；新配置到达时重置。
+    private var bridgedHeight: CGFloat = 0
+    private var bridgeScheduled = false
+    private var bridgeStreak = 0
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        scheduleBridgeCheck()
+    }
+
+    private func scheduleBridgeCheck() {
+        guard !bridgeScheduled, bridgeStreak < 4 else { return }
+        bridgeScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.bridgeScheduled = false
+            self.bridgeHostHeightIfNeeded()
+        }
+    }
+
+    private func bridgeHostHeightIfNeeded() {
+        guard host.view.window != nil, bounds.width > 1 else { return }
+        let fit = host.view.systemLayoutSizeFitting(
+            CGSize(width: bounds.width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        ).height
+        guard fit.isFinite, fit > 0 else { return }
+        if abs(fit - bridgedHeight) <= 1 {
+            // 收敛：高度与上次桥值一致，重置熔断计数。
+            bridgeStreak = 0
+            return
+        }
+        bridgedHeight = fit
+        bridgeStreak += 1
+        var node: UIView? = self
+        var foundCell: UICollectionViewCell?
+        var foundCollectionView: UICollectionView?
+        while let cur = node {
+            if foundCell == nil, let c = cur as? UICollectionViewCell { foundCell = c }
+            if foundCollectionView == nil, let v = cur as? UICollectionView { foundCollectionView = v }
+            node = cur.superview
+        }
+        (foundCell as? SelfSizingCell)?.clearAllMeasuredStateForBridge()
+        foundCollectionView?.invalidateLayout()
+        // 下一拍复查：确认 cell 已按新高度布局并收敛（或继续修正直到熔断）。
+        scheduleBridgeCheck()
     }
 
     /// 沿 responder 链向上找最近的 view controller（cell → collectionView → VC）。
